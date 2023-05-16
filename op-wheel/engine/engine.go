@@ -51,6 +51,14 @@ func getHeader(ctx context.Context, client client.RPC, method string, tag string
 	return header, nil
 }
 
+func headBlock(ctx context.Context, client client.RPC) (head *types.Block, err error) {
+	head, err = getBlock(ctx, client, "eth_getBlockByNumber", "latest")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block: %w", err)
+	}
+	return head, nil
+}
+
 func headSafeFinalized(ctx context.Context, client client.RPC) (head *types.Block, safe, finalized *types.Header, err error) {
 	head, err = getBlock(ctx, client, "eth_getBlockByNumber", "latest")
 	if err != nil {
@@ -158,6 +166,17 @@ func Auto(ctx context.Context, metrics Metricer, client client.RPC, log log.Logg
 	ticker := time.NewTicker(time.Millisecond * 100)
 	defer ticker.Stop()
 
+	status, err := StatusNoSafe(ctx, client)
+	if err != nil {
+		panic(err)
+	}
+	// if block is 0, start by sending forkchoiceUpdated to the EL to trigger PoS activation
+        if status.Head.Number == 0 {
+		if err := updateForkchoice(ctx, client, status.Head.Hash, status.Head.Hash, status.Head.Hash); err != nil {
+			panic(err)
+		}
+	}
+
 	var lastPayload *engine.ExecutableData
 	var buildErr error
 	for {
@@ -260,6 +279,22 @@ func Status(ctx context.Context, client client.RPC) (*StatusData, error) {
 		Head:      eth.L1BlockRef{Hash: head.Hash(), Number: head.NumberU64(), Time: head.Time(), ParentHash: head.ParentHash()},
 		Safe:      eth.L1BlockRef{Hash: safe.Hash(), Number: safe.Number.Uint64(), Time: safe.Time, ParentHash: safe.ParentHash},
 		Finalized: eth.L1BlockRef{Hash: finalized.Hash(), Number: finalized.Number.Uint64(), Time: finalized.Time, ParentHash: finalized.ParentHash},
+		Txs:       uint64(len(head.Transactions())),
+		Gas:       head.GasUsed(),
+		StateRoot: head.Root(),
+		BaseFee:   head.BaseFee(),
+	}, nil
+}
+
+func StatusNoSafe(ctx context.Context, client client.RPC) (*StatusData, error) {
+	head, err := headBlock(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	return &StatusData{
+		Head:      eth.L1BlockRef{Hash: head.Hash(), Number: head.NumberU64(), Time: head.Time(), ParentHash: head.ParentHash()},
+		Safe:      eth.L1BlockRef{},
+		Finalized: eth.L1BlockRef{},
 		Txs:       uint64(len(head.Transactions())),
 		Gas:       head.GasUsed(),
 		StateRoot: head.Root(),
